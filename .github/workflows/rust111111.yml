@@ -1,0 +1,52 @@
+name: Rust
+
+on:
+  push:
+    branches: ['master']
+  repository_dispatch:
+    types: [driver_updated]
+
+env:
+  CARGO_TERM_COLOR: always
+  DRIVER_URL: ${{ github.event.client_payload.driver_url || vars.DRIVER_URL }}
+  DRIVER_VERSION: ${{ github.event.client_payload.driver_version || vars.DRIVER_VERSION || 'stub' }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2024-09-25
+          target: x86_64-unknown-uefi
+          components: rustfmt
+
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          cache-all-crates: true
+
+      - name: Check fmt
+        run: cargo fmt --check
+
+      - name: Download driver
+        run: ./.github/workflows/Download-Driver.ps1
+        env:
+          DRIVER_URL_AUTHORIZATION: ${{ github.event.client_payload.driver_authorization || secrets.DRIVER_URL_AUTHORIZATION }}
+
+      - name: Build UEFI loader
+        run: cargo b -v -r --target x86_64-unknown-uefi
+
+      - name: Build ISO
+        run: ./scripts/Create-ISO.ps1 -Bootloader target/x86_64-unknown-uefi/release/valthrun-uefi.efi -Destination ./valthrun-bootloader-${{env.DRIVER_VERSION}}.iso
+
+      - name: Upload artifact to portal
+        shell: bash
+        run: .github/workflows/artifact_upload_iso.sh kernel-uefi-loader ./valthrun-bootloader-${{env.DRIVER_VERSION}}.iso ${{env.DRIVER_VERSION}}
+        if: ${{ github.event_name == 'repository_dispatch' }}
+        env:
+          ARTIFACT_API_KEY: ${{ secrets.ARTIFACT_API_KEY }}
